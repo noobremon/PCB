@@ -28,6 +28,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 import json
+import csv
 import base64
 from io import BytesIO
 from PIL import Image
@@ -140,6 +141,13 @@ pcb_inspector = IndustrialPCBInspector(
     test_path=str(PROJECT_ROOT / "test_images"),
     defective_storage=str(PROJECT_ROOT / "defective_storage"),
 )
+
+# Initialize directory paths for file operations
+BASE_DIR = Path(__file__).resolve().parent
+ANNOTATED_DIR = BASE_DIR.parent / "defective_storage"
+ANNOTATED_DIR.mkdir(parents=True, exist_ok=True)
+CSV_LOG_PATH = BASE_DIR / "inspections.csv"
+REALTIME_LAST = ANNOTATED_DIR / "realtime" / "last_annotated.jpg"
 
 # Initialize Camera Manager and Workflow Manager with retry logic
 MAX_RETRIES = 3
@@ -275,8 +283,11 @@ def on_inspection_result(result_data):
     }))
 
 # Setup workflow callbacks
-workflow_manager.add_state_callback(on_state_change)
-workflow_manager.add_result_callback(on_inspection_result)
+if workflow_manager is not None:
+    workflow_manager.add_state_callback(on_state_change)
+    workflow_manager.add_result_callback(on_inspection_result)
+else:
+    logger.warning("⚠️ Workflow manager is None - callbacks not registered")
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
@@ -363,9 +374,12 @@ async def inspect_pcb_image(
             # For non-defective images, use the temporary result
             visualization_path = f"/api/pcb/result/{temp_filename}"
         
+        # Handle potential None filename with fallback
+        safe_filename = file.filename or f"uploaded_image_{uuid.uuid4().hex[:8]}.jpg"
+        
         # Save the result with visualization path
         result_data = PCBInspectionResult(
-            image_name=file.filename,
+            image_name=safe_filename,
             is_defective=results['is_defective'],
             confidence_score=float(results['confidence_score']) if results['confidence_score'] is not None else 0.0,
             defects=results['defects'],
@@ -390,7 +404,7 @@ async def inspect_pcb_image(
             "id": result_dict['id'],
             "timestamp": result_dict['timestamp'],
             "mode": "api",
-            "filename": file.filename,
+            "filename": safe_filename,
             "is_defective": str(results['is_defective']).lower(),
             "confidence_score": float(results['confidence_score']) if results['confidence_score'] is not None else 0.0,
             "defect_count": len(results['defects']),
@@ -705,8 +719,20 @@ async def connect_camera(camera_type: str = "opencv"):
 async def disconnect_camera():
     """Disconnect camera"""
     try:
+        if camera_manager is None:
+            logger.warning("Camera manager not initialized")
+            return {
+                "success": False, 
+                "message": "Camera manager not initialized",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
         camera_manager.disconnect_camera()
-        return {"success": True, "message": "Camera disconnected"}
+        return {
+            "success": True, 
+            "message": "Camera disconnected",
+            "timestamp": datetime.utcnow().isoformat()
+        }
     except Exception as e:
         logger.error(f"Error disconnecting camera: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -843,7 +869,19 @@ async def trigger_manual_inspection():
     
     try:
         logger.info("Triggering manual inspection...")
-        success = workflow_manager.trigger_manual_inspection()
+        if not workflow_manager:
+            error_msg = "Workflow manager not initialized"
+            logger.error(error_msg)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "error",
+                    "message": error_msg,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        success = workflow_manager.trigger_inspection()
         
         if success:
             status_msg = "Manual inspection triggered successfully"
@@ -926,6 +964,17 @@ async def get_workflow_state():
     
     try:
         # Get the current state with additional context
+        if not workflow_manager:
+            error_msg = "Workflow manager not initialized"
+            logger.error(error_msg)
+            return {
+                "status": "error",
+                "message": error_msg,
+                "state": "unavailable",
+                "camera_connected": False,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
         state = workflow_manager.get_current_state()
         
         # Add camera connection status
@@ -1051,11 +1100,35 @@ async def stop_workflow():
 async def export_session_report():
     """Export session report"""
     try:
-        report_path = workflow_manager.export_session_report()
+        if not workflow_manager:
+            error_msg = "Workflow manager not initialized"
+            logger.error(error_msg)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "error",
+                    "message": error_msg,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # Note: The export_session_report method needs a filename parameter
+        # For now, we'll use a default filename with timestamp
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"session_report_{timestamp}.json"
+        report_path = workflow_manager.export_session_report(filename)
+        
         if report_path:
-            return {"success": True, "report_path": report_path}
+            return {
+                "success": True, 
+                "report_path": report_path,
+                "timestamp": datetime.utcnow().isoformat()
+            }
         else:
-            raise HTTPException(status_code=500, detail="Failed to export session report")
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to export session report"
+            )
     except Exception as e:
         logger.error(f"Error exporting session report: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1075,11 +1148,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 if data.get('type') == 'ping':
                     await websocket.send_json({'type': 'pong'})
                 elif data.get('type') == 'get_state':
-                    state = workflow_manager.get_current_state()
-                    await websocket.send_json({
-                        'type': 'state_update',
-                        'data': state
-                    })
+                    if workflow_manager:
+                        state = workflow_manager.get_current_state()
+                        await websocket.send_json({
+                            'type': 'state_update',
+                            'data': state
+                        })
+                    else:
+                        await websocket.send_json({
+                            'type': 'error',
+                            'data': {'message': 'Workflow manager not initialized'}
+                        })
                 
             except WebSocketDisconnect:
                 break
@@ -1131,13 +1210,6 @@ try:
 except OverflowError:
     # If sys.maxsize is too large, use a smaller value
     csv.field_size_limit(2147483647)  # Maximum 32-bit integer value
-
-# Ensure directories exist
-BASE_DIR = Path(__file__).resolve().parent
-ANNOTATED_DIR = BASE_DIR.parent / "defective_storage"
-ANNOTATED_DIR.mkdir(parents=True, exist_ok=True)
-CSV_LOG_PATH = BASE_DIR / "inspections.csv"
-REALTIME_LAST = ANNOTATED_DIR / "realtime" / "last_annotated.jpg"
 
 # Ensure CSV file exists with headers
 if not CSV_LOG_PATH.exists():
@@ -1488,6 +1560,9 @@ async def api_download_inspections_csv():
 async def api_realtime_preview():
     """Return raw camera preview with timestamp"""
     try:
+        if not camera_manager:
+            return generate_placeholder_image("Camera manager not initialized")
+        
         if not camera_manager.is_camera_connected():
             return generate_placeholder_image("Camera not connected")
             
