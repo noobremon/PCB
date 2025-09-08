@@ -450,6 +450,62 @@ class InspectionWorkflowManager:
             'session_duration': (datetime.now() - self.session_stats['session_start']).total_seconds() 
                               if self.session_stats['session_start'] else 0
         }
+    
+    def _capture_stabilized_image(self) -> Optional[np.ndarray]:
+        """Capture a stabilized image using multiple frames"""
+        if not self.is_camera_connected():
+            logger.error("Cannot capture stabilized image - camera not connected")
+            return None
+        
+        if self.camera_manager is None:
+            logger.error("Cannot capture stabilized image - camera manager not initialized")
+            return None
+        
+        try:
+            # Get stabilization settings from config
+            num_frames = self.config.get('image_stabilization_frames', 3)
+            delay = self.config.get('image_stabilization_delay', 0.5)
+            
+            logger.info(f"Capturing {num_frames} frames for image stabilization...")
+            
+            frames = []
+            for i in range(num_frames):
+                try:
+                    # Add delay between captures for stabilization
+                    if i > 0:
+                        time.sleep(delay)
+                    
+                    frame = self.camera_manager.capture_single_image()
+                    if frame is not None and frame.size > 0:
+                        frames.append(frame)
+                        logger.debug(f"Captured frame {i+1}/{num_frames}: {frame.shape}")
+                    else:
+                        logger.warning(f"Failed to capture frame {i+1}/{num_frames}")
+                        
+                except Exception as e:
+                    logger.error(f"Error capturing frame {i+1}/{num_frames}: {e}")
+                    continue
+            
+            if not frames:
+                logger.error("No valid frames captured for stabilization")
+                return None
+            
+            if len(frames) < num_frames:
+                logger.warning(f"Only captured {len(frames)}/{num_frames} frames for stabilization")
+            
+            # Use the last captured frame as the stabilized result
+            # In a more advanced implementation, you could:
+            # - Average multiple frames to reduce noise
+            # - Apply image registration to align frames
+            # - Use the sharpest frame based on focus metrics
+            stabilized_frame = frames[-1]
+            
+            logger.info(f"Successfully captured stabilized image: {stabilized_frame.shape}")
+            return stabilized_frame
+            
+        except Exception as e:
+            logger.error(f"Error during stabilized image capture: {e}")
+            return None
 
     def _workflow_loop(self):
         """

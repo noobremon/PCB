@@ -1,6 +1,15 @@
 """
 Camera Integration Module for Industrial PCB AOI System
 Supports Baumer SDK cameras and phone/webcam cameras
+
+NOTE: The Baumer SDK (pgbm) is an optional dependency for industrial cameras.
+If not installed, the system will automatically fall back to OpenCV camera interface.
+
+To install Baumer SDK:
+1. Download and install Baumer GenICam SDK from Baumer's official website
+2. Ensure the SDK's Python bindings are in your PYTHONPATH
+3. Restart your application
+
 Author: AI Assistant
 """
 
@@ -16,7 +25,9 @@ from abc import ABC, abstractmethod
 import json
 import os
 
-# Configure logging
+# Optional industrial camera SDK imports (gracefully handled if not available)
+# These are imported dynamically in the respective classes to avoid import errors
+# when the Baumer SDK is not installed
 logger = logging.getLogger(__name__)
 
 class CameraInterface(ABC):
@@ -82,8 +93,8 @@ class BaumerSDKCamera(CameraInterface):
     def _check_baumer_availability(self):
         """Check if Baumer SDK is available and properly installed"""
         try:
-            import pgbm
-            from pgbm import PgDevice, PgSystem, PgStream, PgNodemap
+            import pgbm  # type: ignore
+            from pgbm import PgDevice, PgSystem, PgStream, PgNodemap  # type: ignore
             
             # Test basic SDK functionality
             system = PgSystem.GetInstance()
@@ -96,15 +107,17 @@ class BaumerSDKCamera(CameraInterface):
             
         except ImportError as e:
             error_msg = "❌ Baumer SDK is not installed or not in PYTHONPATH.\n"
-            error_msg += "Please install the Baumer GenICam SDK and ensure it's in your PYTHONPATH."
-            logger.error(error_msg)
+            error_msg += "Please install the Baumer GenICam SDK and ensure it's in your PYTHONPATH.\n"
+            error_msg += "Falling back to OpenCV camera interface."
+            logger.warning(error_msg)
             self._is_baumer_available = False
             return False
             
         except Exception as e:
             error_msg = f"❌ Error initializing Baumer SDK: {str(e)}\n"
-            error_msg += "Please check your Baumer camera connection and drivers."
-            logger.error(error_msg)
+            error_msg += "Please check your Baumer camera connection and drivers.\n"
+            error_msg += "Falling back to OpenCV camera interface."
+            logger.warning(error_msg)
             self._is_baumer_available = False
             return False
     
@@ -580,18 +593,28 @@ class OpenCVCamera(CameraInterface):
         
         for attempt in range(retries + 1):
             try:
-                # Check if camera is still connected
+                # Check if camera is still connected and not None
                 if not self.camera or not self.camera.isOpened():
                     logger.warning("Camera not open, attempting to reconnect...")
                     if not self.connect():
                         logger.error("Failed to reconnect to camera")
                         return None
                 
+                # Double-check camera is not None after reconnection
+                if self.camera is None:
+                    logger.error("Camera is None after reconnection attempt")
+                    return None
+                
                 # Clear buffer by grabbing frames (but fewer for performance)
                 for _ in range(2):
-                    self.camera.grab()
+                    if self.camera is not None:
+                        self.camera.grab()
                 
                 # Capture frame with error handling
+                if self.camera is None:
+                    logger.error("Camera became None during capture")
+                    return None
+                    
                 ret, frame = self.camera.read()
                 
                 if not ret or frame is None or frame.size == 0:
@@ -656,10 +679,6 @@ class OpenCVCamera(CameraInterface):
                 time.sleep(0.1)
         
         return None
-    
-    def is_connected(self) -> bool:
-        """Check if OpenCV camera is connected"""
-        return self.is_camera_connected and self.camera is not None
         
     def capture_image(self) -> Optional[np.ndarray]:
         """Capture single image (implements CameraInterface abstract method)"""
@@ -748,6 +767,7 @@ class CameraManager:
         try:
             # Check for OpenCV cameras
             for i in range(10):  # Check first 10 indices
+                cap = None
                 try:
                     cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # Use DSHOW on Windows for better performance
                     if cap.isOpened():
@@ -768,14 +788,14 @@ class CameraManager:
                         cap.release()
                 except Exception as e:
                     logger.warning(f"Error checking camera index {i}: {e}")
-                    if 'cap' in locals():
+                    if cap is not None:
                         cap.release()
             
             # Check for Baumer camera (simulated for now)
             try:
                 # Try to import Baumer SDK to check availability
                 try:
-                    import bgapi
+                    import pgbm  # type: ignore
                     self._is_baumer_available = True
                     available_cameras.append({
                         'index': 'baumer',
@@ -825,7 +845,7 @@ class CameraManager:
             self.logger.error(f"Failed to initialize Camera Manager: {e}")
             return False
     
-    def connect_camera(self, camera_type: str = None) -> bool:
+    def connect_camera(self, camera_type: Optional[str] = None) -> bool:
         """
         Connect to the specified camera type or preferred camera
         
@@ -850,7 +870,7 @@ class CameraManager:
         self.logger.info(f"Attempting to connect to {camera_type} camera...")
         
         try:
-            if camera_type.lower() == 'baumer':
+            if camera_type and camera_type.lower() == 'baumer':
                 self.current_camera = BaumerSDKCamera(
                     camera_id=self.camera_config.get('baumer_camera_id', '')
                 )
@@ -924,6 +944,10 @@ class CameraManager:
             return None
         
         try:
+            if self.current_camera is None:
+                self.logger.error("No camera connected")
+                return None
+                
             image = self.current_camera.capture_image()
             if image is not None:
                 self.logger.info("✅ Image captured successfully")
@@ -935,7 +959,7 @@ class CameraManager:
             self.logger.error(f"Error during image capture: {e}")
             return None
     
-    def start_auto_capture(self, interval: float = None):
+    def start_auto_capture(self, interval: Optional[float] = None):
         """Start automatic image capture"""
         if interval:
             self.capture_interval = interval
@@ -1045,7 +1069,7 @@ class CameraManager:
                 self.logger.error(f"Unexpected error in auto capture loop: {e}")
                 time.sleep(1)  # Prevent tight error loop
     
-    def get_captured_image(self) -> Optional[Tuple[np.ndarray, float]]:
+    def get_captured_image(self) -> Optional[np.ndarray]:
         """Get image from capture queue"""
         try:
             if not self.capture_queue.empty():
@@ -1064,7 +1088,7 @@ class CameraManager:
         """Get information about all available cameras"""
         return [cam['info'] for cam in self.available_cameras]
     
-    def save_image(self, image: np.ndarray, filename: str = None, 
+    def save_image(self, image: np.ndarray, filename: Optional[str] = None, 
                    directory: str = "captured_images") -> str:
         """Save captured image"""
         if filename is None:

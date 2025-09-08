@@ -145,7 +145,7 @@ class ConsistencyVerifier:
         
         return results
     
-    def verify_consistency(self, test_image_path: str = None) -> bool:
+    def verify_consistency(self, test_image_path: str | None = None) -> bool:
         """Verify that all modes produce identical results"""
         logger.info("🔍 VERIFYING CONSISTENCY ACROSS ALL INSPECTION MODES...")
         
@@ -240,7 +240,7 @@ class ConsistencyVerifier:
         
         logger.info(f"📄 Consistency report saved: {filename}")
     
-    def run_full_verification(self, test_image_path: str = None) -> bool:
+    def run_full_verification(self, test_image_path: str | None = None) -> bool:
         """Run complete consistency verification"""
         logger.info("🚀 STARTING INDUSTRIAL PCB AOI CONSISTENCY VERIFICATION")
         logger.info("="*80)

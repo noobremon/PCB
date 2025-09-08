@@ -43,6 +43,7 @@ class PCBAPITester:
         print(f"   URL: {url}")
         
         try:
+            response = None
             if method == 'GET':
                 response = requests.get(url, headers=headers, timeout=30)
             elif method == 'POST':
@@ -51,6 +52,17 @@ class PCBAPITester:
                 else:
                     headers['Content-Type'] = 'application/json'
                     response = requests.post(url, json=data, headers=headers, timeout=30)
+            else:
+                error_msg = f"Unsupported HTTP method: {method}"
+                print(f"   Error: {error_msg} ❌")
+                self.log_test(name, False, error_msg)
+                return False, {}
+
+            if response is None:
+                error_msg = "No response received"
+                print(f"   Error: {error_msg} ❌")
+                self.log_test(name, False, error_msg)
+                return False, {}
 
             success = response.status_code == expected_status
             

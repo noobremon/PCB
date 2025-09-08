@@ -12,6 +12,7 @@ logging.basicConfig(
 def test_camera():
     print("Testing camera connection...")
     
+    camera = None  # Initialize to None to avoid unbound variable warning
     try:
         # Initialize camera with default settings
         print("Initializing camera...")
@@ -51,7 +52,7 @@ def test_camera():
         # Clean up
         print("\nCleaning up...")
         cv2.destroyAllWindows()
-        if 'camera' in locals():
+        if camera is not None:
             camera.disconnect()
         print("Test completed")
 

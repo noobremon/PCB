@@ -10,7 +10,7 @@ import os
 import glob
 import json
 from pathlib import Path
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 import matplotlib.pyplot as plt
 from scipy import ndimage
 from skimage import feature, measure, morphology
@@ -578,7 +578,7 @@ class PCBInspector:
         return classified
 
     def visualize_defects(self, image: np.ndarray, results: Dict[str, Any], 
-                         save_path: str = None) -> np.ndarray:
+                         save_path: Optional[str] = None) -> np.ndarray:
         """
         Visualize detected defects on the image
         

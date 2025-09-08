@@ -246,7 +246,7 @@ class IndustrialPCBInspector:
         logger.info(f"Loaded {len(annotations)} annotated images from marked dataset")
         return annotations
 
-    def process_with_marked_dataset(self, image: np.ndarray, image_name: str = None) -> Dict[str, Any]:
+    def process_with_marked_dataset(self, image: np.ndarray, image_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Process an image using the marked dataset for validation
         
@@ -274,7 +274,7 @@ class IndustrialPCBInspector:
     def _validate_against_marked(self, 
                                result: Dict[str, Any], 
                                ground_truth: Dict[str, Any],
-                               image: np.ndarray = None) -> Dict[str, Any]:
+                               image: Optional[np.ndarray] = None) -> Dict[str, Any]:
         """
         Validate inspection results against ground truth annotations
         
@@ -505,7 +505,7 @@ class IndustrialPCBInspector:
         hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten()
         features['histogram'] = hist
         features['hist_entropy'] = self._calculate_entropy(hist)
-        features['hist_peaks'] = len(signal.find_peaks(hist, height=np.max(hist)*0.1)[0])
+        features['hist_peaks'] = len(signal.find_peaks(hist, height=float(np.max(hist))*0.1)[0])
         
         # Texture analysis using multiple methods
         # Local Binary Patterns
@@ -657,11 +657,9 @@ class IndustrialPCBInspector:
             # Process defective images for defect pattern learning
             defect_feature_vectors = []
             defect_patterns = []
-            del image
-            del processed
-
-            if (i + 1) % 50 == 0:
-                  gc.collect()
+            
+            # Trigger garbage collection periodically
+            gc.collect()
 
             
             if defective_images:
@@ -685,11 +683,12 @@ class IndustrialPCBInspector:
                     }
                     
                     defect_patterns.append(defect_signature)
-                    del image
-                    del processed
+                    
+                    # Clean up loop variables for memory management
+                    del image, processed
                     
                     if (i + 1) % 50 == 0:
-                     gc.collect()
+                        gc.collect()
 
 
                 self.defect_patterns = defect_patterns
@@ -717,12 +716,17 @@ class IndustrialPCBInspector:
                     feature_matrix = np.array(all_features)
                     
                     # Use Isolation Forest for unsupervised anomaly detection
-                    # Contamination rate based on actual defective ratio
-                    contamination_rate = len(defect_feature_vectors) / len(all_features) if defect_feature_vectors else 0.1
-                    contamination_rate = max(0.05, min(0.5, contamination_rate))  # Keep between 5% and 50%
+                    # Contamination rate based on actual defective ratio or fallback to detection_params
+                    if defect_feature_vectors:
+                        contamination_rate = len(defect_feature_vectors) / len(all_features)
+                        contamination_rate = max(0.05, min(0.5, contamination_rate))  # Keep between 5% and 50%
+                        contamination_value = float(contamination_rate)
+                    else:
+                        # Use automatic detection when no defective samples available
+                        contamination_value = 'auto'  # type: ignore  # scikit-learn accepts both float and 'auto'
                     
                     self.anomaly_detector = IsolationForest(
-                        contamination=contamination_rate,
+                        contamination=contamination_value,  # type: ignore  # scikit-learn accepts both float and 'auto'
                         random_state=42,
                         n_estimators=200,  # More trees for better accuracy
                         max_samples='auto',
@@ -730,7 +734,7 @@ class IndustrialPCBInspector:
                     )
                     self.anomaly_detector.fit(feature_matrix)
                     
-                    logger.info(f"      ✅ ML model trained with contamination rate: {contamination_rate:.2f}")
+                    logger.info(f"      ✅ ML model trained with contamination: {contamination_value}")
                 
                 # Calculate defect thresholds from actual data
                 self._calculate_industry_thresholds(reference_features, defect_patterns)
@@ -797,6 +801,19 @@ class IndustrialPCBInspector:
                         'area': area
                     })
 
+    def inspect_pcb(self, image: np.ndarray, source_mode: str = "manual") -> Dict[str, Any]:
+        """
+        PCB inspection method for compatibility with marked dataset processing
+        
+        Args:
+            image: Input PCB image as numpy array
+            source_mode: Source of inspection ("manual", "realtime_baumer", "realtime_usb")
+            
+        Returns:
+            Dictionary containing inspection results
+        """
+        return self.detect_industrial_defects(image, source_mode)
+    
     def detect_industrial_defects(self, image: np.ndarray, source_mode: str = "manual") -> Dict[str, Any]:
         """
         INDUSTRY-LEVEL defect detection with GUARANTEED CONSISTENCY across ALL modes
@@ -1180,7 +1197,7 @@ class IndustrialPCBInspector:
                 # Calculate normalized cross-correlation
                 result = cv2.matchTemplate(resized_roi, template, cv2.TM_CCOEFF_NORMED)
                 match_score = np.max(result)
-                best_match = max(best_match, match_score)
+                best_match = max(best_match, float(match_score))
                 
             except Exception:
                 continue
@@ -1238,20 +1255,33 @@ class IndustrialPCBInspector:
                 # Use watershed segmentation for better localization
                 from scipy import ndimage
                 from skimage.segmentation import watershed
-                from skimage.feature import peak_local_maxima
+                from skimage.feature import peak_local_max
                 
                 # Create distance transform
                 binary = processed['binary_otsu']
-                distance = ndimage.distance_transform_edt(binary)
+                try:
+                    distance = ndimage.distance_transform_edt(binary)
+                    # Ensure distance is a proper numpy array
+                    if not isinstance(distance, np.ndarray):
+                        logger.warning("Distance transform did not return numpy array")
+                        return defects
+                except Exception as e:
+                    logger.warning(f"Distance transform failed: {e}")
+                    return defects
                 
                 # Find local maxima as markers
-                coords = peak_local_maxima(distance, min_distance=20, threshold_abs=5)
+                coords = peak_local_max(distance, min_distance=20, threshold_abs=5)
                 markers = np.zeros_like(distance, dtype=int)
                 for i, coord in enumerate(coords):
                     markers[coord] = i + 1
                 
                 # Apply watershed
-                labels = watershed(-distance, markers, mask=binary)
+                if isinstance(distance, np.ndarray) and distance.size > 0:
+                    distance_neg = (-distance).astype(np.float64)
+                    labels = watershed(distance_neg, markers, mask=binary)
+                else:
+                    logger.warning("Invalid distance transform, skipping watershed segmentation")
+                    return defects
                 
                 # Analyze each segment
                 for label in np.unique(labels):
@@ -1356,7 +1386,7 @@ class IndustrialPCBInspector:
                 
                 similarities.append(similarity)
         
-        return np.mean(similarities) if similarities else 0.0
+        return float(np.mean(similarities)) if similarities else 0.0
 
     def _localize_pattern_defects(self, current_processed: Dict[str, np.ndarray], 
                                 pattern_processed: Dict[str, np.ndarray]) -> List[Dict]:
@@ -1386,7 +1416,7 @@ class IndustrialPCBInspector:
                     
                     # Calculate match confidence based on area and intensity difference
                     roi_diff = diff[y:y+h, x:x+w]
-                    match_confidence = min(np.mean(roi_diff) / 255.0, 1.0)
+                    match_confidence = min(float(np.mean(roi_diff.astype(np.float64))) / 255.0, 1.0)
                     
                     locations.append({
                         'bbox': (x, y, w, h),
@@ -1662,7 +1692,7 @@ class IndustrialPCBInspector:
                 
                 # Find anomalous regions
                 _, anomaly_mask = cv2.threshold(spatial_filtered.astype(np.uint8), 
-                                              np.percentile(spatial_filtered, 95), 
+                                              float(np.percentile(spatial_filtered, 95)), 
                                               255, cv2.THRESH_BINARY)
                 
                 contours, _ = cv2.findContours(anomaly_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1932,7 +1962,7 @@ class IndustrialPCBInspector:
                 
             # Calculate region statistics
             mask = np.zeros_like(gray_region)
-            cv2.drawContours(mask, [largest_contour], 0, 255, -1)
+            cv2.drawContours(mask, [largest_contour], 0, (255,), -1)
             mean_val, std_val = cv2.meanStdDev(gray_region, mask=mask)[:2]
             region_mean = mean_val[0][0]
             region_std = std_val[0][0] if std_val is not None else 0
@@ -1951,6 +1981,12 @@ class IndustrialPCBInspector:
             # 1. Missing Component Detection
             # Multi-stage validation for precise missing component identification
             
+            # Get detection method from defect dictionary or default
+            method = defect.get('method', 'unknown')
+            
+            # Initialize confidence variable to avoid unbound errors
+            confidence = defect.get('confidence', 0.5)
+            
             # Calculate minimum dimension for small defect detection
             min_dim = min(w, h)
             
@@ -1964,7 +2000,7 @@ class IndustrialPCBInspector:
                 # Calculate additional shape metrics
                 rect = cv2.minAreaRect(largest_contour)
                 box = cv2.boxPoints(rect)
-                box = np.int0(box)
+                box = np.array(box, dtype=np.int32)
                 rect_area = cv2.contourArea(box)
                 extent = float(contour_area) / rect_area if rect_area > 0 else 0
                 
@@ -2060,39 +2096,39 @@ class IndustrialPCBInspector:
                 defect['confidence'] = max(defect.get('confidence', 0), 0.8)
                 return 'solder_defect'
                 
-            # 4. Broken Trace (long, thin, dark)
+            # 5. Broken Trace (long, thin, dark)
             if (aspect_ratio > 3.0 and 
                 region_mean < 100 and 
                 region_std < 40 and
                 'edge' in method):
                 return 'broken_trace'
                 
-            # 5. Component Damage (irregular shape)
+            # 6. Component Damage (irregular shape)
             if (solidity < 0.6 and 
-                area > 100 and 
+                contour_area > 100 and 
                 region_std > 30 and
                 'morphological' in method):
                 return 'component_damage'
                 
-            # 6. Contamination (irregular, moderate intensity)
+            # 7. Contamination (irregular, moderate intensity)
             if (0.3 < aspect_ratio < 3.0 and 
                 80 < region_mean < 180 and 
                 region_std > 25 and
                 'morphological' in method):
                 return 'contamination'
                 
-            # 7. Short Circuit (small, very bright)
-            if (area < 500 and 
+            # 8. Short Circuit (small, very bright)
+            if (contour_area < 500 and 
                 region_mean > 200 and 
                 circularity > 0.6 and
                 solidity > 0.8):
                 return 'short_circuit'
                 
-            # 8. Wrong Component (significant deviation from template)
+            # 9. Wrong Component (significant deviation from template)
             if ('template' in method or 'statistical' in method) and confidence > 0.7:
                 return 'wrong_component'
                 
-            # 9. Misalignment (slight offset from expected position)
+            # 10. Misalignment (slight offset from expected position)
             if ('template' in method and 
                 'position' in defect and 
                 defect.get('position_deviation', 0) > 5 and
@@ -2276,6 +2312,8 @@ class IndustrialPCBInspector:
         if histograms:
             baseline['avg_histogram'] = np.mean(histograms, axis=0)
             baseline['std_histogram'] = np.std(histograms, axis=0)
+        
+        return baseline
         
     def _calculate_industry_thresholds(self, good_features: List[Dict], defect_patterns: List[Dict]):
         """
