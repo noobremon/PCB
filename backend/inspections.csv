@@ -61,3 +61,5 @@ fe160a5e-2c4a-4ee2-9b33-f2142f1d9346,2025-08-27T16:07:14.754467,api,p2 ok2.jpg,f
 4766cd18-d3aa-40a6-a036-b46bb1bad275,2025-08-27T16:08:29.270400,api,P6 NOT OK Marked.jpg,true,1.0,3,3,/api/pcb/defective/defective_pcb_20250827_160829.jpg
 587726ba-6809-4bc0-a95e-4703578c9f08,2025-08-27T16:09:26.987162,api,11.JPG,true,0.8950952529492446,20,20,/api/pcb/defective/defective_pcb_20250827_160926.jpg
 2a5cc5ae-22e8-4f1a-bf59-8c4fcf8ed7f7,2025-08-27T16:09:45.544641,api,p1 ok2.jpg,false,0.0,0,0,/api/pcb/result/temp_inspection_815e7824520c4a7e9ad60d22d7e0d29d.jpg
+6aedb62e-faae-40d2-aed1-247ef1de9e7a,2025-09-07T21:00:25.233686,api,p2 ok2.jpg,false,0.0,0,0,/api/pcb/result/temp_inspection_cfb6ca31451345f884db1982c3da5e86.jpg
+d93f5f90-dc2b-4ba5-8876-eb1ae9195b2a,2025-09-07T21:09:24.143730,api,11.JPG,true,0.893103448275862,20,20,/api/pcb/defective/defective_pcb_20250907_210923.jpg
