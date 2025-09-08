@@ -1016,6 +1016,76 @@ async def get_workflow_state():
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@api_router.get("/realtime/workflow/stats")
+async def get_workflow_stats():
+    """
+    Get workflow statistics and recent results
+    
+    Returns:
+        dict: Workflow statistics including session stats and recent results
+    """
+    try:
+        if not workflow_manager:
+            logger.warning("Workflow manager not initialized")
+            return {
+                "session_stats": {
+                    "total_inspected": 0,
+                    "total_defective": 0,
+                    "total_good": 0,
+                    "session_duration": 0,
+                    "avg_inspection_time": 0,
+                    "avg_quality_score": 100.0
+                },
+                "recent_results": [],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+        # Get session statistics
+        session_stats = workflow_manager.get_session_stats() if workflow_manager else {
+            "total_inspected": 0,
+            "total_defective": 0,
+            "total_good": 0,
+            "defect_rate": 0,
+            "avg_quality": 100.0
+        }
+        
+        # Get recent results (last 20)
+        recent_results = []
+        if hasattr(workflow_manager, 'results_history'):
+            recent_results = [
+                {
+                    "result_id": result.result_id,
+                    "timestamp": result.timestamp.isoformat(),
+                    "is_defective": result.is_defective,
+                    "quality_score": result.quality_score,
+                    "defect_count": len(result.defects),
+                    "inspection_time": result.inspection_time
+                }
+                for result in workflow_manager.results_history[-20:]  # Last 20 results
+            ]
+        
+        return {
+            "session_stats": session_stats,
+            "recent_results": recent_results,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting workflow stats: {e}")
+        return {
+            "session_stats": {
+                "total_inspected": 0,
+                "total_defective": 0,
+                "total_good": 0,
+                "session_duration": 0,
+                "avg_inspection_time": 0,
+                "avg_quality_score": 100.0
+            },
+            "recent_results": [],
+            "timestamp": datetime.utcnow().isoformat(),
+            "error": str(e)
+        }
+
 @api_router.post("/realtime/workflow/stop")
 async def stop_workflow():
     """

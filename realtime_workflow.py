@@ -12,6 +12,8 @@ import time
 import threading
 import queue
 import logging
+import os
+import random
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Callable
 import json
@@ -161,7 +163,7 @@ class InspectionWorkflowManager:
         """Add callback for inspection results"""
         self.result_callbacks.append(callback)
     
-    def _notify_state_change(self, new_state: InspectionState, data: Dict[str, Any] = None):
+    def _notify_state_change(self, new_state: InspectionState, data: Optional[Dict[str, Any]] = None):
         """Notify registered callbacks of state change"""
         self.current_state = new_state
         
@@ -360,48 +362,55 @@ class InspectionWorkflowManager:
             if self._camera_connected and self.camera_manager and self.camera_manager.is_camera_connected():
                 logger.info("Camera already connected")
                 return True
+            
+            # Retry configuration
+            max_retries = 3
+            retry_delay = 1.0
+            
+            for attempt in range(max_retries):
+                try:
+                    # Initialize camera manager if not already done
+                    if self.camera_manager is None:
+                        logger.info(f"Initializing camera manager (attempt {attempt + 1}/{max_retries})")
+                        self.camera_manager = CameraManager()
                     
-            try:
-                # Initialize camera manager if not already done
-                if self.camera_manager is None:
-                    logger.info(f"Initializing camera manager (attempt {attempt + 1}/{max_retries})")
-                    self.camera_manager = CameraManager()
-                
-                # Try to connect to Baumer camera first
-                logger.info("Attempting to connect to Baumer camera...")
-                if self.camera_manager.connect_camera(camera_type="baumer"):
-                    self._camera_connected = True
-                    logger.info("✅ Baumer camera connected successfully")
-                    return True
-                
-                # Fall back to OpenCV if Baumer fails
-                logger.warning("⚠️ Baumer camera connection failed, falling back to OpenCV...")
-                if self.camera_manager.connect_camera(camera_type="opencv"):
-                    self._camera_connected = True
-                    logger.info("✅ OpenCV camera connected successfully")
-                    return True
-                
-                # If we get here, both connection attempts failed
-                logger.warning(f"⚠️ Camera connection attempt {attempt + 1} failed, retrying...")
-                time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-                
-            except Exception as e:
-                logger.error(f"❌ Error connecting to camera (attempt {attempt + 1}): {e}", exc_info=True)
-                time.sleep(retry_delay)
-                retry_delay *= 2
-                
-                # Clean up any partial initialization
-                if self.camera_manager:
-                    try:
-                        self.camera_manager.disconnect_camera()
-                    except:
-                        pass
-                
-        # If we've exhausted all retries
-        self._camera_connected = False
-        logger.error("❌ All camera connection attempts failed")
-        return False
+                    # Try to connect to Baumer camera first
+                    logger.info("Attempting to connect to Baumer camera...")
+                    if self.camera_manager.connect_camera(camera_type="baumer"):
+                        self._camera_connected = True
+                        logger.info("✅ Baumer camera connected successfully")
+                        return True
+                    
+                    # Fall back to OpenCV if Baumer fails
+                    logger.warning("⚠️ Baumer camera connection failed, falling back to OpenCV...")
+                    if self.camera_manager.connect_camera(camera_type="opencv"):
+                        self._camera_connected = True
+                        logger.info("✅ OpenCV camera connected successfully")
+                        return True
+                    
+                    # If we get here, both connection attempts failed
+                    logger.warning(f"⚠️ Camera connection attempt {attempt + 1} failed, retrying...")
+                    if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error connecting to camera (attempt {attempt + 1}): {e}", exc_info=True)
+                    if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    
+                    # Clean up any partial initialization
+                    if self.camera_manager:
+                        try:
+                            self.camera_manager.disconnect_camera()
+                        except:
+                            pass
+            
+            # If we've exhausted all retries
+            self._camera_connected = False
+            logger.error("❌ All camera connection attempts failed")
+            return False
     
     def disconnect_camera(self) -> bool:
         """
@@ -475,6 +484,10 @@ class InspectionWorkflowManager:
                     if i > 0:
                         time.sleep(delay)
                     
+                    if self.camera_manager is None:
+                        logger.error("Cannot capture frame - camera manager not initialized")
+                        return None
+                    
                     frame = self.camera_manager.capture_single_image()
                     if frame is not None and frame.size > 0:
                         frames.append(frame)
@@ -533,6 +546,10 @@ class InspectionWorkflowManager:
                     
                     # Capture frame
                     try:
+                        if self.camera_manager is None:
+                            logger.error("Cannot capture frame - camera manager not initialized")
+                            raise RuntimeError("Camera manager not initialized")
+                        
                         frame = self.camera_manager.capture_single_image()
                         if frame is None or frame.size == 0:
                             raise ValueError("Invalid or empty frame captured")
